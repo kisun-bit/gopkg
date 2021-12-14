@@ -3,7 +3,7 @@ package main
 import (
 	"github.com/kisunSea/gopkg/logging"
 	"time"
-) /**/
+)
 
 func ExampleFileRotateLogger() {
 
