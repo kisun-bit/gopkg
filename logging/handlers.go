@@ -5,7 +5,7 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-type RotateWriter struct {
+type rotateWriter struct {
 	Level       Level
 	LogSavePath string // path for saving logs
 	LogFileExt  string // Log file suffix
@@ -15,18 +15,18 @@ type RotateWriter struct {
 	Compress    bool   // Whether to compress expiration logs
 }
 
-type ConsoleWriter struct {
+type consoleWriter struct {
 	Level Level
 }
 
-type Handler struct {
+type handler struct {
 	Sync       zapcore.WriteSyncer
 	EnableFunc zap.LevelEnablerFunc
 }
 
 // NewRotateWriter returns rotate logs configuration
-func NewRotateWriter(level Level, file string, maxSize, maxBackups, maxAges int) *RotateWriter {
-	r := new(RotateWriter)
+func NewRotateWriter(level Level, file string, maxSize, maxBackups, maxAges int) *rotateWriter {
+	r := new(rotateWriter)
 	r.Level = level
 	r.LogSavePath = file
 	r.MaxSize = maxSize
@@ -36,8 +36,8 @@ func NewRotateWriter(level Level, file string, maxSize, maxBackups, maxAges int)
 }
 
 // NewConsoleWriter returns console los
-func NewConsoleWriter(level Level) *ConsoleWriter {
-	c := new(ConsoleWriter)
+func NewConsoleWriter(level Level) *consoleWriter {
+	c := new(consoleWriter)
 	c.Level = level
 	return c
 }

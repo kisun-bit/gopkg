@@ -47,61 +47,13 @@ const (
 	EncodeConsole Encoder = "console"
 )
 
-// Log is used for logging messages
-type Log interface {
-	// Debug logs messages at DEBUG level
-	Debug(args ...interface{})
-	// Info logs messages at INFO level
-	Info(args ...interface{})
-	// Warn logs messages at WARN level
-	Warn(args ...interface{})
-	// Error logs messages at ERROR level
-	Error(args ...interface{})
-	// Fatal logs messages at FATAL level
-	Fatal(args ...interface{})
-	// Panic logs messages at Panic level
-	Panic(args ...interface{})
-	// DPanic logs messages at DPanic level
-	DPanic(args ...interface{})
-	// DebugF logs messages at DEBUG level
-	DebugF(format string, args ...interface{})
-	// InfoF logs messages at INFO level
-	InfoF(format string, args ...interface{})
-	// WarnF logs messages at WARN level
-	WarnF(format string, args ...interface{})
-	// ErrorF logs messages at ERROR level
-	ErrorF(format string, args ...interface{})
-	// FatalF logs messages at FATAL level
-	FatalF(format string, args ...interface{})
-	// PanicF logs messages at Panic level
-	PanicF(format string, args ...interface{})
-	// DPanicF logs messages at DPanic level
-	DPanicF(format string, args ...interface{})
-	// DebugW logs messages at DEBUG level
-	DebugW(msg string, keysAndValues ...interface{})
-	// InfoW logs messages at INFO level
-	InfoW(msg string, keysAndValues ...interface{})
-	// WarnW logs messages at WARN level
-	WarnW(msg string, keysAndValues ...interface{})
-	// ErrorW logs messages at ERROR level
-	ErrorW(msg string, keysAndValues ...interface{})
-	// FatalW logs messages at FATAL level
-	FatalW(msg string, keysAndValues ...interface{})
-	// PanicW logs messages at Panic level
-	PanicW(msg string, keysAndValues ...interface{})
-	// DPanicW logs messages at DPanic level
-	DPanicW(msg string, keysAndValues ...interface{})
-	// stack
-	Stack() string
-}
-
 type Logger struct {
-	Logger   *zap.Logger
-	SLogger  *zap.SugaredLogger
-	Config_  zapcore.EncoderConfig
-	Level_   zapcore.Level
-	Format_  Encoder
-	Handlers []Handler
+	baseLogger *zap.Logger
+	sLogger    *zap.SugaredLogger
+	config_    zapcore.EncoderConfig
+	level_     zapcore.Level
+	format_    Encoder
+	handlers   []handler
 }
 
 ////////////////////////////////////////////
@@ -125,7 +77,7 @@ func InitConfig(format string) zapcore.EncoderConfig {
 	}
 }
 
-// NewLumberjackFileRotatingLogger returns instance of `*lumberjack.Logger`
+// NewLumberjackFileRotatingLogger returns instance of `*lumberjack.baseLogger`
 func NewLumberjackFileRotatingLogger(level Level, file string, maxSize, maxBackups, maxAge int) *lumberjack.Logger {
 	if level > DebugLevel {
 		// rename log file name
@@ -158,7 +110,7 @@ func MkdirAllUtilSuccess(dir string, retryTimes int) (err error) {
 // `timeFormat`: The time format of each line in the log
 // `color`: True when color is enabled
 // `encoder`: Log encoding format, divided into `EncodeJson` and `EncodeConsole`, default `EncodeConsole`
-// `writer`: The type is going to be either `*lumberjack.Logger` or `nil`,
+// `writer`: The type is going to be either `*lumberjack.baseLogger` or `nil`,
 //           when set to nil, it will be output to the stdout.
 func NewLogger(
 	level,
@@ -167,10 +119,10 @@ func NewLogger(
 	timeFormat string,
 	color bool,
 	encoder Encoder,
-	writers ...interface{}) (logger Log, flushFunc func() error, err error) {
+	writers ...interface{}) (logger *Logger, err error) {
 
-	l_ := new(Logger)
-	l_.Level_ = level
+	logger = new(Logger)
+	logger.level_ = level
 
 	if timeFormat == "" {
 		timeFormat = "2006/01/02 - 15:04:05.000"
@@ -178,63 +130,63 @@ func NewLogger(
 	if prefix != "" {
 		prefix = " " + prefix
 	}
-	l_.Config_ = InitConfig(timeFormat + prefix)
+	logger.config_ = InitConfig(timeFormat + prefix)
 
 	if stackTrace == Level(-1) {
-		l_.Config_.StacktraceKey = ""
+		logger.config_.StacktraceKey = ""
 	}
 	if !color {
-		l_.Config_.EncodeLevel = zapcore.CapitalLevelEncoder
+		logger.config_.EncodeLevel = zapcore.CapitalLevelEncoder
 	}
-	if err = l_.SetWriters(writers); err != nil {
-		return nil, nil, err
+	if err = logger.setWriters(writers); err != nil {
+		return nil, err
 	}
 
-	l_.Format_ = encoder
-	l_.Logger = zap.New(
-		l_.GetAndBuildCore(l_.Config_),
+	logger.format_ = encoder
+	logger.baseLogger = zap.New(
+		logger.GetAndBuildCore(logger.config_),
 		zap.AddStacktrace(stackTrace))
 
-	l_.Logger = l_.Logger.WithOptions(zap.AddCaller())
-	l_ = l_.sugared()
+	logger.baseLogger = logger.baseLogger.WithOptions(zap.AddCaller())
+	logger = logger.sugared()
 
-	return l_, l_.Logger.Sync, nil
+	return logger, nil
 }
 
 func (l *Logger) sugared() *Logger {
-	l.Logger = l.Logger.WithOptions(zap.AddCallerSkip(1)) // Trace back 1 level of the call stack
-	l.SLogger = l.Logger.Sugar()
+	l.baseLogger = l.baseLogger.WithOptions(zap.AddCallerSkip(1)) // Trace back 1 level of the call stack
+	l.sLogger = l.baseLogger.Sugar()
 	return l
 }
 
-func (l *Logger) InitHandlers() {
-	l.Handlers = make([]Handler, 0)
+func (l *Logger) initHandlers() {
+	l.handlers = make([]handler, 0)
 }
 
-func (l *Logger) AddHandler(sync zapcore.WriteSyncer, lowLevel zapcore.Level) {
-	l.Handlers = append(l.Handlers, Handler{
+func (l *Logger) addHandler(sync zapcore.WriteSyncer, lowLevel zapcore.Level) {
+	l.handlers = append(l.handlers, handler{
 		Sync:       sync,
 		EnableFunc: func(lev zapcore.Level) bool { return lev >= lowLevel },
 	})
 }
 
-func (l *Logger) SetWriters(writers []interface{}) (err error) {
+func (l *Logger) setWriters(writers []interface{}) (err error) {
 
 	defer func() {
-		if len(l.Handlers) == 0 {
-			l.AddHandler(zapcore.AddSync(os.Stdout), DebugLevel)
+		if len(l.handlers) == 0 {
+			l.addHandler(zapcore.AddSync(os.Stdout), DebugLevel)
 		}
 	}()
 
 	for _, writer := range writers {
-		if err = l.BindHandler(writer); err != nil {
+		if err = l.bindHandler(writer); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (l *Logger) BindHandler(writer interface{}) (err error) {
+func (l *Logger) bindHandler(writer interface{}) (err error) {
 
 	var (
 		sync__     zapcore.WriteSyncer
@@ -242,37 +194,37 @@ func (l *Logger) BindHandler(writer interface{}) (err error) {
 	)
 
 	switch i := writer.(type) {
-	case *RotateWriter:
+	case *rotateWriter:
 		if err = MkdirAllUtilSuccess(filepath.Dir(i.LogSavePath), 10); err != nil {
 			return err
 		}
-		// lumberjack.Logger is already safe for concurrent use, so we don't need to lock it.
+		// lumberjack.baseLogger is already safe for concurrent use, so we don't need to lock it.
 		lumberJackLogger := NewLumberjackFileRotatingLogger(i.Level, i.LogSavePath, i.MaxSize, i.MaxBackups, i.MaxAge)
 		sync__, lowLevel__ = zapcore.AddSync(lumberJackLogger), i.Level
 		zapcore.Lock(sync__)
 		break
-	case *ConsoleWriter:
+	case *consoleWriter:
 		sync__, lowLevel__ = zapcore.AddSync(os.Stdout), i.Level
 		break
 	default:
 		return fmt.Errorf("unsupported writer: %T", i)
 	}
 
-	l.AddHandler(sync__, lowLevel__)
+	l.addHandler(sync__, lowLevel__)
 	return nil
 }
 
 // GetAndBuildCore
 func (l *Logger) GetAndBuildCore(config zapcore.EncoderConfig) zapcore.Core {
 
-	if len(l.Handlers) == 0 {
+	if len(l.handlers) == 0 {
 		panic("why handlers is nil ???")
 	}
 
 	var cores []zapcore.Core
-	for _, handler := range l.Handlers {
+	for _, handler := range l.handlers {
 		var tmpEncoder zapcore.Encoder
-		switch l.Format_ {
+		switch l.format_ {
 		case EncodeJson:
 			tmpEncoder = zapcore.NewJSONEncoder(config)
 		case EncodeConsole:
@@ -289,146 +241,152 @@ func (l *Logger) GetAndBuildCore(config zapcore.EncoderConfig) zapcore.Core {
 }
 
 func (l *Logger) CloseStacktrace() *Logger {
-	c := l.Config_
+	c := l.config_
 	c.StacktraceKey = ""
-	l.Logger = l.WrapCore(c)
+	l.baseLogger = l.WrapCore(c)
+	l.sugared()
 	return l
 }
 
 func (l *Logger) SetStacktrace(level Level) *Logger {
-	l.Logger = l.Logger.WithOptions(zap.AddStacktrace(level))
+	l.baseLogger = l.baseLogger.WithOptions(zap.AddStacktrace(level))
 	return l
 }
 
 func (l *Logger) NoColor() *Logger {
-	c := l.Config_
+	c := l.config_
 	c.EncodeLevel = zapcore.CapitalLevelEncoder
-	l.Logger = l.WrapCore(c)
+	l.baseLogger = l.WrapCore(c)
 	return l
 }
 
 // SetTimeFormat sets the log output format.
 // default time format is `2006/01/02 - 15:04:05.000`,
 func (l *Logger) SetTimeFormat(timeFormat string) *Logger {
-	c := l.Config_
+	c := l.config_
 	c.EncodeTime = func(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
 		enc.AppendString(t.Format(timeFormat))
 	}
 
-	l.Logger = l.WrapCore(c)
+	l.baseLogger = l.WrapCore(c)
+	l.sugared()
 	return l
 }
 
 // WrapCore wraps or replaces the SugarLogger's underlying zapcore.Core.
 func (l *Logger) WrapCore(ec zapcore.EncoderConfig) *zap.Logger {
-	return l.Logger.WithOptions(zap.WrapCore(func(c zapcore.Core) zapcore.Core {
+	return l.baseLogger.WithOptions(zap.WrapCore(func(c zapcore.Core) zapcore.Core {
 		return l.GetAndBuildCore(ec)
 	}))
 }
 
+func (l *Logger) Sync() (err error) {
+	return l.sLogger.Sync()
+}
+
 // Debug logs messages at DEBUG level
 func (l *Logger) Debug(args ...interface{}) {
-	l.SLogger.Debug(args...)
+	l.sLogger.Debug(args...)
 }
 
 // Info logs messages at INFO level
 func (l *Logger) Info(args ...interface{}) {
-	l.SLogger.Info(args...)
+	l.sLogger.Info(args...)
 }
 
 // Warn logs messages at WARN level
 func (l *Logger) Warn(args ...interface{}) {
-	l.SLogger.Warn(args...)
+	l.sLogger.Warn(args...)
 }
 
 // Error logs messages at ERROR level
 func (l *Logger) Error(args ...interface{}) {
-	l.SLogger.Error(args...)
+	l.sLogger.Error(args...)
 }
 
 // Fatal logs messages at FATAL level
 func (l *Logger) Fatal(args ...interface{}) {
-	l.SLogger.Fatal(args...)
+	l.sLogger.Fatal(args...)
 }
 
 // Panic logs messages at Panic level
 func (l *Logger) Panic(args ...interface{}) {
-	l.SLogger.Panic(args...)
+	l.sLogger.Panic(args...)
 }
 
 // DPanic logs messages at DPanic level
 func (l *Logger) DPanic(args ...interface{}) {
-	l.SLogger.DPanic(args...)
+	l.sLogger.DPanic(args...)
 }
 
 // DebugW logs messages at DEBUG level
 func (l *Logger) DebugW(msg string, keysAndValues ...interface{}) {
-	l.SLogger.Debugw(msg, keysAndValues...)
+	l.sLogger.Debugw(msg, keysAndValues...)
 }
 
 // InfoW logs messages at INFO level
 func (l *Logger) InfoW(msg string, keysAndValues ...interface{}) {
-	l.SLogger.Infow(msg, keysAndValues...)
+	l.sLogger.Infow(msg, keysAndValues...)
 }
 
 // WarnW logs messages at WARN level
 func (l *Logger) WarnW(msg string, keysAndValues ...interface{}) {
-	l.SLogger.Warnw(msg, keysAndValues...)
+	l.sLogger.Warnw(msg, keysAndValues...)
 }
 
 // ErrorW logs messages at ERROR level
 func (l *Logger) ErrorW(msg string, keysAndValues ...interface{}) {
-	l.SLogger.Errorw(msg, keysAndValues...)
+	l.sLogger.Errorw(msg, keysAndValues...)
 }
 
 // FatalW logs messages at FATAL level
 func (l *Logger) FatalW(msg string, keysAndValues ...interface{}) {
-	l.SLogger.Fatalw(msg, keysAndValues...)
+	l.sLogger.Fatalw(msg, keysAndValues...)
 }
 
 // PanicW logs messages at Panic level
 func (l *Logger) PanicW(msg string, keysAndValues ...interface{}) {
-	l.SLogger.Panicw(msg, keysAndValues...)
+	l.sLogger.Panicw(msg, keysAndValues...)
 }
 
 // DPanicW logs messages at DPanic level
 func (l *Logger) DPanicW(msg string, keysAndValues ...interface{}) {
-	l.SLogger.DPanicw(msg, keysAndValues...)
+	l.sLogger.DPanicw(msg, keysAndValues...)
 }
 
 // DebugF logs messages at DEBUG level
 func (l *Logger) DebugF(format string, args ...interface{}) {
-	l.SLogger.Debugf(format, args...)
+	l.sLogger.Debugf(format, args...)
 }
 
 // InfoF logs messages at INFO level
 func (l *Logger) InfoF(format string, args ...interface{}) {
-	l.SLogger.Infof(format, args...)
+	l.sLogger.Infof(format, args...)
 }
 
 // WarnF logs messages at WARN level
 func (l *Logger) WarnF(format string, args ...interface{}) {
-	l.SLogger.Warnf(format, args...)
+	l.sLogger.Warnf(format, args...)
 }
 
 // ErrorF logs messages at ERROR level
 func (l *Logger) ErrorF(format string, args ...interface{}) {
-	l.SLogger.Errorf(format, args...)
+	l.sLogger.Errorf(format, args...)
 }
 
 // Fatalf logs messages at FATAL level
 func (l *Logger) FatalF(format string, args ...interface{}) {
-	l.SLogger.Fatalf(format, args...)
+	l.sLogger.Fatalf(format, args...)
 }
 
 // PanicF logs messages at Panic level
 func (l *Logger) PanicF(format string, args ...interface{}) {
-	l.SLogger.Panicf(format, args...)
+	l.sLogger.Panicf(format, args...)
 }
 
 // DPanicF logs messages at DPanic level
 func (l *Logger) DPanicF(format string, args ...interface{}) {
-	l.SLogger.DPanicf(format, args...)
+	l.sLogger.DPanicf(format, args...)
 }
 
 // Stack returns the function call stack
