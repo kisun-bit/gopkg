@@ -4,147 +4,24 @@ import (
 	"errors"
 	"fmt"
 	"go.uber.org/zap/zapcore"
-	"gopkg.in/ini.v1"
-	"strconv"
-	"strings"
 	"sync"
 )
 
 var (
 	__l = new(zapcore.Level)
-	_lc = NewLoggerContainer()
+	_lc = NewLoggerContainer() // global loggers pool
 )
 
-func __convertStr2Level(levelStr string) Level {
-	if err := __l.Set(levelStr); err != nil {
-		panic(err)
-	}
-	return __l.Get().(zapcore.Level)
-}
-
-func __in(target string, origin []string) bool {
-	for _, o := range origin {
-		if o == target {
-			return true
-		}
-	}
-	return false
-}
-
-func __getCfgKey(__cfg *ini.File, section, key string) string {
-	return __cfg.Section(section).Key(key).String()
-}
-
-// parser ...
-
-const (
-	SectionLoggers              = "loggers"
-	SectionLoggersValKeys       = "keys"
-	SectionHandlers             = "handlers"
-	SectionHandlersValKeys      = "keys"
-	SectionLoggerPrefix         = "logger_"
-	SectionLoggerValLevel       = "level"
-	SectionLoggerValStackLevel  = "stack_level"
-	SectionLoggerValHandler     = "handler"
-	SectionHandlerPrefix        = "handler_"
-	SectionHandlerValClass      = "class"
-	SectionHandlerValLevel      = "level"
-	SectionHandlerValMaxAge     = "max_age"
-	SectionHandlerValMaxSize    = "max_size"
-	SectionHandlerValMaxBackups = "max_backups"
-	SectionHandlerValLogFile    = "log_file"
-
-	ClassRotateFile = "logging.NewFileRotatingLogger"
-	ClassConsole    = "logging.NewConsoleStreamingLogger"
-)
-
-type confParser struct {
-	conf  string
-	iniFp *ini.File
-}
-
-func NewConfParser(conf string) (c *confParser, err error) {
-	c = new(confParser)
-	c.conf = conf
-
-	if c.iniFp, err = ini.Load(conf); err != nil {
-		return nil, err
-	}
-	return c, nil
-}
-
-func (c *confParser) LoggerKeys() []string {
-	return strings.Split(
-		__getCfgKey(c.iniFp, SectionLoggers, SectionLoggersValKeys), ",")
-}
-
-func (c *confParser) HandlerKeys() []string {
-	return strings.Split(
-		__getCfgKey(c.iniFp, SectionHandlers, SectionHandlersValKeys), ",")
-}
-
-func (c *confParser) ValLoggerLevel(loggerKey string) Level {
-	return __convertStr2Level(
-		__getCfgKey(c.iniFp, SectionLoggerPrefix+loggerKey, SectionLoggerValLevel))
-}
-
-func (c *confParser) ValLoggerStackLevel(loggerKey string) Level {
-	return __convertStr2Level(
-		__getCfgKey(c.iniFp, SectionLoggerPrefix+loggerKey, SectionLoggerValStackLevel))
-}
-
-func (c *confParser) ValLoggerHandler(loggerKey string) []string {
-	return strings.Split(
-		__getCfgKey(c.iniFp, SectionLoggerPrefix+loggerKey, SectionLoggerValHandler), ",")
-}
-
-func (c *confParser) ValHandlerLogFile(handlerKey string) string {
-	return __getCfgKey(c.iniFp, SectionHandlerPrefix+handlerKey, SectionHandlerValLogFile)
-}
-
-func (c *confParser) ValHandlerClass(handlerKey string) string {
-	return __getCfgKey(c.iniFp, SectionHandlerPrefix+handlerKey, SectionHandlerValClass)
-}
-
-func (c *confParser) ValHandlerLevel(handlerKey string) Level {
-	return __convertStr2Level(
-		__getCfgKey(c.iniFp, SectionHandlerPrefix+handlerKey, SectionHandlerValLevel))
-}
-
-func (c *confParser) ValHandlerMaxAge(handlerKey string) int {
-	_r := __getCfgKey(c.iniFp, SectionHandlerPrefix+handlerKey, SectionHandlerValMaxAge)
-	if r, err := strconv.Atoi(_r); err == nil {
-		return r
-	}
-	return 0
-}
-
-func (c *confParser) ValHandlerMaxSize(handlerKey string) int {
-	_r := __getCfgKey(c.iniFp, SectionHandlerPrefix+handlerKey, SectionHandlerValMaxSize)
-	if r, err := strconv.Atoi(_r); err == nil {
-		return r
-	}
-	return 0
-}
-
-func (c *confParser) ValHandlerMaxBackups(handlerKey string) int {
-	_r := __getCfgKey(c.iniFp, SectionHandlerPrefix+handlerKey, SectionHandlerValMaxBackups)
-	if r, err := strconv.Atoi(_r); err == nil {
-		return r
-	}
-	return 0
+func NewLoggerContainer() (_ *LoggerPool) {
+	l := new(LoggerPool)
+	l.__containers = make(map[string]*Logger)
+	return l
 }
 
 type LoggerPool struct {
 	// __containers only initialize once (write), it's safe to load `logger` (read) multiple times later
 	__containers           map[string]*Logger
 	__loggerContainersOnce sync.Once
-}
-
-func NewLoggerContainer() (_ *LoggerPool) {
-	l := new(LoggerPool)
-	l.__containers = make(map[string]*Logger)
-	return l
 }
 
 func (lc *LoggerPool) GetLogger(name string) (logger *Logger, err error) {
@@ -157,11 +34,15 @@ func (lc *LoggerPool) GetLogger(name string) (logger *Logger, err error) {
 	return nil, fmt.Errorf("failed to get logger named `%s`", name)
 }
 
-func SetConf(conf string) (_ *LoggerPool, err error) {
-	if err := initLoggersContainers(conf); err != nil {
-		return nil, fmt.Errorf("set logging conf `%s` failed", conf)
-	}
-	return _lc, nil
+func SetConf(conf string) (lp *LoggerPool, err error) {
+	_lc.__loggerContainersOnce.Do(func() {
+		if err := initLoggersContainers(conf); err != nil {
+			lp, err = nil, fmt.Errorf("set logging conf `%s` failed", conf)
+			return
+		}
+		lp, err = _lc, nil
+	})
+	return
 }
 
 // initLoggersContainers initializes a pool of log objects
@@ -185,8 +66,7 @@ func initLoggersContainers(conf string) (err error) {
 
 		for _, handlerName := range handlersKeysArr {
 			if !__in(handlerName, c.HandlerKeys()) {
-				return fmt.Errorf(
-					"why handler `%s` not in `handlers` section", handlerName)
+				return fmt.Errorf("why handler `%s` not in `handlers` section", handlerName)
 			}
 			switch c.ValHandlerClass(handlerName) {
 			case ClassRotateFile:

@@ -19,6 +19,8 @@ type consoleWriter struct {
 	Level Level
 }
 
+// TODO socket-writer、memory-writer、(more...)
+
 type handler struct {
 	Sync       zapcore.WriteSyncer
 	EnableFunc zap.LevelEnablerFunc

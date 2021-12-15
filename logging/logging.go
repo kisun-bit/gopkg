@@ -58,8 +58,8 @@ type Logger struct {
 
 ////////////////////////////////////////////
 
-// InitConfig returns `EncoderConfig`
-func InitConfig(format string) zapcore.EncoderConfig {
+// DefaultConfig returns `EncoderConfig`
+func DefaultConfig(format string) zapcore.EncoderConfig {
 	return zapcore.EncoderConfig{
 		MessageKey:     "message",
 		LevelKey:       "level",
@@ -130,7 +130,7 @@ func NewLogger(
 	if prefix != "" {
 		prefix = " " + prefix
 	}
-	logger.config_ = InitConfig(timeFormat + prefix)
+	logger.config_ = DefaultConfig(timeFormat + prefix)
 
 	if stackTrace == Level(-1) {
 		logger.config_.StacktraceKey = ""
