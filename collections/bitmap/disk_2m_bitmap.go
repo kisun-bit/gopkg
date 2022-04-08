@@ -8,7 +8,7 @@ import (
 	"sync"
 )
 
-var logger, _ = logging.GLogger()
+var logger = logging.GLogger()
 
 type Bit struct {
 	Offset int64
@@ -95,7 +95,7 @@ func (b *BitmapFile) __iter(__start int64) {
 			logger.ErrorF("Bitmap read err: %v", err)
 			return
 		} else {
-			var _bit = new(Bit)
+			_bit := new(Bit)
 			_bit.Offset = __start + count*int64(b.GetBlockSize())
 			_bit.Length = b.GetBlockSize()
 			_bit.Hash = binary.BigEndian.Uint64(buf[:n])
